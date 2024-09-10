@@ -1,4 +1,4 @@
-# minecraft_nightly_backup
+# Minecraft Server Backup Script
 
 This ps1 script will backup a minecraft server to a different location.
 
