@@ -96,27 +96,31 @@ function Write-Log {
     }
 }
 
-function Test-NSSMProcess {
+function Test-MinecraftServer {
     param (
-        [string]$serviceName
+        [string]$serverIp = "localhost",
+        [int]$rconPort = 25575,
+        [string]$rconPassword
     )
 
-    # Try to get the process using Get-Process
     try {
-        $nssmProcess = Get-Process -Name $serviceName -ErrorAction SilentlyContinue
+        # Send a simple "list" command via mcrcon to check if the server is responsive
+        $rconOutput = & mcrcon -H $serverIp -P $rconPort -p $rconPassword "list" 2>&1
 
-        # If the process is not running, exit the script and log the error
-        if (-not $nssmProcess) {
-            return $false
-        }else{
+        # Log the RCON output for debugging
+        Write-Log ("RCON output: " + $rconOutput)
+
+        # Check if the RCON command returned a valid response
+        if ($rconOutput -match "There are") {
+            Write-Log "Minecraft server is up and responding to RCON commands."
             return $true
+        } else {
+            Write-Log "Minecraft server is not responding or RCON command failed."
+            return $false
         }
     } catch {
-        Write-Log "----------------------------------------------------------------`n`n" $false
-        Write-Log ""
-        Write-Log "Quitting the backup attempt. Error checking NSSM service '$serviceName': $_" $false
-        Write-Log "----------------------------------------------------------------`n`n" $false
-        exit 1
+        Write-Log "Error occurred while checking Minecraft server status via RCON: $_"
+        return $false
     }
 }
 
@@ -163,6 +167,7 @@ function New-FolderIfNotExists {
     }
 }
 
+
 # Create the location the user specified from their backupPath and create the log file in this location if they don't exist
 New-FolderIfNotExists $backupPath 
 $logFile = Join-Path $backupPath "dailySaving.log"
@@ -170,10 +175,12 @@ $logFile = Join-Path $backupPath "dailySaving.log"
 # Set the backupPath to go one level deeper into a timestamped folder  
 $backupPath = Join-Path $backupPath ((Get-Date).ToString("MM-dd-yyyy") + "_backup_" + (Get-LastPartOfPath $serverPath))
 
+Write-Log "----------------------------------------------------------------" $false
+Write-Log ""
+Write-Log "Attempting minecraft backup" $false
+
 # Check if this timestamped folder already exists (backup was already done today)
 if ((Test-Path $backupPath)) {
-    Write-Log "----------------------------------------------------------------" $false
-    Write-Log ""
     Write-Log "Directory $backupPath already exists. There has already been a backup today, aborting." $false
     Write-Log "----------------------------------------------------------------`n`n" $false
     exit 1
@@ -183,59 +190,59 @@ if ((Test-Path $backupPath)) {
 New-FolderIfNotExists $backupPath
 
 # check if the server is up
-$nssmServiceRunning = Test-NSSMProcess -serviceName $nssmServiceName
+$serverRunning = Test-MinecraftServer -rconPassword $rconPassword
 
-Write-Log "----------------------------------------------------------------" $false
 Write-Log ""
 Write-Log ("Starting nightly backup process: Copying the directory at the path of`n" + $serverPath + "`nand backing it up to `n" + $backupPath + "`nin a new timestamped folder.") $false
-Write-Log "----------------------------------------------------------------" $false
 
 # Warn the players
-if ($warningMode -and $nssmServiceRunning) {
-    Write-Log "`nWarn the players, will take around five minutes...`n"
-
+if ($warningMode) {
+    Write-Log "`nWarn the players, will take around five minutes:`n"
+    
     Send-MinecraftMessage "The server will shut down for an automatic backup in five minutes."
     Start-Sleep -Seconds 150
-
+    
     Send-MinecraftMessage "The server will shut down for an automatic backup in two and a half minutes."
     Start-Sleep -Seconds 90
-
+    
     Send-MinecraftMessage "The server will shut down for an automatic backup in one minute."
     Start-Sleep -Seconds 30
-
+    
     Send-MinecraftMessage "The server will shut down for an automatic backup in thirty seconds."
     Start-Sleep -Seconds 10
-
+    
     Send-MinecraftMessage "The server will shut down for an automatic backup in twenty seconds."
     Start-Sleep -Seconds 10
-
+    
     Send-MinecraftMessage "The server will shut down for an automatic backup in ten seconds."
     Start-Sleep -Seconds 5
-
+    
     Send-MinecraftMessage "The server will shut down for an automatic backup in five seconds."
     Start-Sleep -Seconds 1
-
+    
     Send-MinecraftMessage "The server will shut down for an automatic backup in four seconds."
     Start-Sleep -Seconds 1
-
+    
     Send-MinecraftMessage "The server will shut down for an automatic backup in three seconds."
     Start-Sleep -Seconds 1
-
+    
     Send-MinecraftMessage "The server will shut down for an automatic backup in two seconds."
     Start-Sleep -Seconds 1
-
+    
     Send-MinecraftMessage "The server will shut down for an automatic backup in one second."
     Start-Sleep -Seconds 1
-
+    
     Send-MinecraftMessage "The server is shutting down for an automatic backup."
     Start-Sleep -Seconds 3
 }
 
 # Stop the server
-if($nssmServiceRunning){
-    Stop-MinecraftService
+if($serverRunning){
     Stop-MinecraftServer
+    Stop-MinecraftService
 }
+
+Write-Log "----------------------------------------------------------------" $false
 
 # Do the backup process
 Write-Log "Starting file copy process."
@@ -262,14 +269,14 @@ Get-ChildItem -Path $serverPath -Recurse | ForEach-Object {
 }
 
 # Restart the server
+Write-Log "----------------------------------------------------------------" $false
+Write-Log ""
 if(Start-MinecraftServer){
     Write-Log "Restarted the minecraft server"
 }else{
     Write-Log "Failed to restart the minecraft server"
 }
 
-Write-Log "----------------------------------------------------------------" $false
-Write-Log ""
 Write-Log ("Backup completed.") $false
 Write-Log "----------------------------------------------------------------`n`n" $false
 
