@@ -16,6 +16,20 @@ A backup folder will be made in a the target directory with the name of the *<cu
 - `serverPath`: the path to the folder that contains all your minecraft server files
 - `backupPath`: the path to the folder where you want the backup folders to be created
 - `rconPassword`: your password for rcon (set in the server.properties file)
-- `serverIp` (optional; default = "localhost"): the ip address to the server
+- `serverIp (optional; default = "localhost")`: the ip address to the server
 - `nssmServiceName`: the name of the nssm service you defined to run your minecraft server (from a batch file)
-- `warningMode` (optional; default = true): whether or not to give the players in the server a five minute warning via log messages sent by rcon before the server shuts down for the backup process
+
+## (optional) Windows task scheduler
+
+Make a task in the task scheduler to run the script daily
+
+- set user as yourself, you can press the search button and type your windows user name for the computer
+- set to run whether user is logged on or not
+- check "Run with highest privileges"
+- set a trigger to run daily at 4am in the Triggers tab
+- In the Actions tab, make a new action with these settings:
+    - program/script: `C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe`
+    - Add arguments: `C:\<pathToScriptLocation\script.ps1> -serverPath '<pathToServer>' -backupPath '<pathToBackupLocation>' -rconPassword '<rconPassword>' -serverIp '<localhost>' -nssmServiceName '<nssmServiceName>'`
+    - Start in: `C:\<pathToScriptLocation>`
+
+*Sometimes after making the task you need to restart the computer in order for it to start working*

@@ -9,9 +9,7 @@ param (
     [Parameter(Mandatory=$false)]
     [string]$serverIp="localhost",  
     [Parameter(Mandatory=$true)]
-    [string]$nssmServiceName,
-    [Parameter(Mandatory=$false)]
-    [bool]$warningMode=$true
+    [string]$nssmServiceName
 )
 
 # Aux functions
@@ -96,6 +94,35 @@ function Write-Log {
     }
 }
 
+function Test-AnyPlayers {
+    param (
+        [string]$serverIp = "localhost",
+        [int]$rconPort = 25575,
+        [string]$rconPassword
+    )
+
+    try {
+        $rconOutput = & mcrcon -H $serverIp -P $rconPort -p $rconPassword "list" 2>&1
+        
+        if($rconOutput -match "There are"){
+            if($rconOutput -match "There are 0"){
+                Write-Log "ZERO players detected in game"
+                return $false
+            }else{
+                Write-Log "Player(s) detected in game"
+                return $true
+            }
+        }else{
+            Write-Log "Minecraft server is not responding or RCON command failed."
+            return $false
+        }
+    }
+    catch {
+        Write-Log "Error occurred while checking Minecraft server status via RCON: $_"
+        return $false
+    }
+}
+
 function Test-MinecraftServer {
     param (
         [string]$serverIp = "localhost",
@@ -106,9 +133,6 @@ function Test-MinecraftServer {
     try {
         # Send a simple "list" command via mcrcon to check if the server is responsive
         $rconOutput = & mcrcon -H $serverIp -P $rconPort -p $rconPassword "list" 2>&1
-
-        # Log the RCON output for debugging
-        Write-Log ("RCON output: " + $rconOutput)
 
         # Check if the RCON command returned a valid response
         if ($rconOutput -match "There are") {
@@ -191,6 +215,20 @@ New-FolderIfNotExists $backupPath
 
 # check if the server is up
 $serverRunning = Test-MinecraftServer -rconPassword $rconPassword
+
+# If the server is running 
+# and there are players in the server currently
+# warn the players with a five min countdown
+if($serverRunning){
+    $playersInGame = Test-AnyPlayers -rconPassword $rconPassword
+    if($playersInGame){
+        $warningMode = $true
+    }else{
+        $warningMode = $false
+    }
+}else{
+    $warningMode = $false
+}
 
 Write-Log ""
 Write-Log ("Starting nightly backup process: Copying the directory at the path of`n" + $serverPath + "`nand backing it up to `n" + $backupPath + "`nin a new timestamped folder.") $false
