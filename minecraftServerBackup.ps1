@@ -9,7 +9,9 @@ param (
     [Parameter(Mandatory=$false)]
     [string]$serverIp="localhost",  
     [Parameter(Mandatory=$true)]
-    [string]$nssmServiceName
+    [string]$nssmServiceName,
+    [Parameter(Mandatory=$false)]
+    [bool]$shortHand=$false  # Flag to suppress detailed copy messages
 )
 
 # Aux functions
@@ -21,16 +23,16 @@ function Send-MinecraftMessage {
     
     Write-Log "Sending message to Minecraft players via RCON: $message"
     
-    # Send the message using the RCON "say" command
-    & mcrcon -H $serverIp -P 25575 -p $rconPassword "say $message"
+    # Send the message using the RCON "say" command with timeout
+    & mcrcon -H $serverIp -P 25575 -p $rconPassword -w 5 "say $message" 2>&1
 }
 
 # Function to stop the Minecraft server using RCON
 function Stop-MinecraftServer {
     Write-Log "Sending stop command to Minecraft server via RCON."
 
-    # Call mcrcon to send the "stop" command
-    & mcrcon -H $serverIp -P 25575 -p $rconPassword stop
+    # Call mcrcon to send the "stop" command with timeout
+    & mcrcon -H $serverIp -P 25575 -p $rconPassword -w 5 stop 2>&1
 }
 
 # Function to start the Minecraft server using NSSM
@@ -52,7 +54,6 @@ function Start-MinecraftServer {
         return $false
     }
 }
-
 
 # Function to stop the Minecraft server using NSSM
 function Stop-MinecraftService {
@@ -88,9 +89,9 @@ function Write-Log {
     # Format the log message with or without the timestamp
     if ($includeTimestamp) {
         $timestamp = Get-Date -Format "yyyy-MM-dd HH:mm:ss"
-        Add-Content -Path $logFile -Value "$timestamp - $message"
+        Add-Content -Path $logFile -Value "$timestamp - $message" -ErrorAction Stop
     } else {
-        Add-Content -Path $logFile -Value "$message"
+        Add-Content -Path $logFile -Value "$message" -ErrorAction Stop
     }
 }
 
@@ -102,22 +103,21 @@ function Test-AnyPlayers {
     )
 
     try {
-        $rconOutput = & mcrcon -H $serverIp -P $rconPort -p $rconPassword "list" 2>&1
+        $rconOutput = & mcrcon -H $serverIp -P $rconPort -p $rconPassword -w 5 "list" 2>&1
         
-        if($rconOutput -match "There are"){
-            if($rconOutput -match "There are 0"){
-                Write-Log "ZERO players detected in game"
+        if ($rconOutput -match "There are") {
+            if ($rconOutput -match "There are 0") {
+                Write-Log "Zero players detected in game"
                 return $false
-            }else{
+            } else {
                 Write-Log "Player(s) detected in game"
                 return $true
             }
-        }else{
-            Write-Log "Minecraft server is not responding or RCON command failed."
+        } else {
+            Write-Log "Minecraft server is not responding or RCON command failed: $rconOutput"
             return $false
         }
-    }
-    catch {
+    } catch {
         Write-Log "Error occurred while checking Minecraft server status via RCON: $_"
         return $false
     }
@@ -132,14 +132,14 @@ function Test-MinecraftServer {
 
     try {
         # Send a simple "list" command via mcrcon to check if the server is responsive
-        $rconOutput = & mcrcon -H $serverIp -P $rconPort -p $rconPassword "list" 2>&1
+        $rconOutput = & mcrcon -H $serverIp -P $rconPort -p $rconPassword -w 5 "list" 2>&1
 
         # Check if the RCON command returned a valid response
         if ($rconOutput -match "There are") {
             Write-Log "Minecraft server is up and responding to RCON commands."
             return $true
         } else {
-            Write-Log "Minecraft server is not responding or RCON command failed."
+            Write-Log "Minecraft server is not responding or RCON command failed: $rconOutput"
             return $false
         }
     } catch {
@@ -175,7 +175,7 @@ function New-FolderIfNotExists {
         $pathComponents[0] + '\'
     }
 
-    # Iterate over the remaining parts of the path, starting after the drive letter or the UNC share
+    # Iterate over the remaining parts of the path, starting after the drive letter or UNC share
     for ($i = if ($fullPath.StartsWith('\\')) { 2 } else { 1 }; $i -lt $pathComponents.Length; $i++) {
         $currentPath = Join-Path $currentPath $pathComponents[$i]
 
@@ -191,10 +191,181 @@ function New-FolderIfNotExists {
     }
 }
 
+# Function to check for player activity from 4:00 AM yesterday to current time based on server logs
+function Test-PlayerActivityInLast24Hours {
+    param (
+        [string]$serverPath  # Path to the Minecraft server directory
+    )
 
-# Create the location the user specified from their backupPath and create the log file in this location if they don't exist
-New-FolderIfNotExists $backupPath 
-$logFile = Join-Path $backupPath "dailySaving.log"
+    # Construct the path to the logs directory
+    $logsDir = Join-Path $serverPath "logs"
+    
+    # Check if logs directory exists; if not, assume activity to be safe
+    if (-not (Test-Path $logsDir)) {
+        Write-Log "Logs directory not found. Assuming player activity to be safe."
+        return $true
+    }
+
+    # Define time window: 4:00 AM yesterday to current time
+    $now = Get-Date
+    $endTime = $now
+    $startTime = [DateTime]::ParseExact($now.AddDays(-1).ToString("yyyy-MM-dd") + " 04:00:00", "yyyy-MM-dd HH:mm:ss", $null)
+    
+    # Format dates for log file name comparison
+    $yesterdayStr = $startTime.ToString("yyyy-MM-dd")
+    $todayStr = $now.ToString("yyyy-MM-dd")
+
+    # Initialize activity flag and variables to track last join
+    $activity = $false
+    $lastJoinTime = $null
+    $lastJoinPlayer = $null
+    $lastJoinFile = $null
+
+    # Iterate through all files in the logs directory
+    Get-ChildItem -Path $logsDir -File | ForEach-Object {
+        $file = $_
+
+        # Process latest.log file
+        if ($file.Name -eq "latest.log") {
+            # Get file's last write time to infer date
+            try {
+                $fileLastWrite = (Get-Item $file.FullName).LastWriteTime
+                # Skip if not from today or yesterday
+                if ($fileLastWrite.Date -ne $now.Date -and $fileLastWrite.Date -ne $now.AddDays(-1).Date) {
+                    return
+                }
+                
+                # Read entire file content
+                $content = Get-Content $file.FullName -Raw -ErrorAction Stop
+                if (-not $content) {
+                    return
+                }
+                $lines = $content -split "`n"
+                
+                # Set log date based on LastWriteTime
+                $logDateStr = if ($fileLastWrite.Date -eq $now.Date) { $todayStr } else { $yesterdayStr }
+                
+                # Check each line for player join events
+                foreach ($line in $lines) {
+                    if ($line -match "joined the game" -and $line -match '\[(\d{2}):(\d{2}):(\d{2})\]') {
+                        try {
+                            # Extract time components and player name
+                            $hour = [int]$matches[1]
+                            $min = [int]$matches[2]
+                            $sec = [int]$matches[3]
+                            if ($line -match '\]:\s*(\w+)\s*joined the game') {
+                                $player = $matches[1]
+                            } else {
+                                $player = "Unknown"
+                            }
+                            
+                            # Construct timestamp using file's inferred date
+                            $logDate = [DateTime]::ParseExact($logDateStr, "yyyy-MM-dd", $null)
+                            $lineTime = $logDate.AddHours($hour).AddMinutes($min).AddSeconds($sec)
+                            
+                            # Check if join time is within the time window
+                            if ($lineTime -ge $startTime -and $lineTime -le $endTime) {
+                                # Update last join if this is the latest
+                                if (-not $lastJoinTime -or $lineTime -gt $lastJoinTime) {
+                                    $lastJoinTime = $lineTime
+                                    $lastJoinPlayer = $player
+                                    $lastJoinFile = $file.Name
+                                }
+                                $activity = $true
+                            }
+                        } catch {
+                            Write-Log "Error parsing time in latest.log line: ${line} - $_"
+                        }
+                    }
+                }
+            } catch {
+                Write-Log "Error accessing latest.log: $_"
+            }
+        } 
+        # Process compressed log files (yyyy-MM-dd-n.log.gz)
+        elseif ($file.Name -match '^(\d{4}-\d{2}-\d{2})-\d+\.log\.gz$') {
+            $logDateStr = $matches[1]
+            
+            # Only process logs from today or yesterday
+            if ($logDateStr -eq $todayStr -or $logDateStr -eq $yesterdayStr) {
+                try {
+                    # Decompress the gzip file
+                    $stream = New-Object System.IO.FileStream $file.FullName, ([IO.FileMode]::Open), ([IO.FileAccess]::Read), ([IO.FileShare]::Read)
+                    $gzip = New-Object System.IO.Compression.GzipStream $stream, ([IO.Compression.CompressionMode]::Decompress)
+                    $reader = New-Object System.IO.StreamReader $gzip
+                    $content = $reader.ReadToEnd()
+                    $reader.Close()
+                    $gzip.Close()
+                    $stream.Close()
+
+                    # Split content into lines
+                    $lines = $content -split "`n"
+                    
+                    # Check each line for player join events
+                    foreach ($line in $lines) {
+                        if ($line -match "joined the game" -and $line -match '\[(\d{2}):(\d{2}):(\d{2})\]') {
+                            try {
+                                # Extract time components and player name
+                                $hour = [int]$matches[1]
+                                $min = [int]$matches[2]
+                                $sec = [int]$matches[3]
+                                if ($line -match '\]:\s*(\w+)\s*joined the game') {
+                                    $player = $matches[1]
+                                } else {
+                                    $player = "Unknown"
+                                }
+                                
+                                # Construct full timestamp for the log line
+                                $logDate = [DateTime]::ParseExact($logDateStr, "yyyy-MM-dd", $null)
+                                $lineTime = $logDate.AddHours($hour).AddMinutes($min).AddSeconds($sec)
+                                
+                                # Check if join time is within the time window
+                                if ($lineTime -ge $startTime -and $lineTime -le $endTime) {
+                                    # Update last join if this is the latest
+                                    if (-not $lastJoinTime -or $lineTime -gt $lastJoinTime) {
+                                        $lastJoinTime = $lineTime
+                                        $lastJoinPlayer = $player
+                                        $lastJoinFile = $file.Name
+                                    }
+                                    $activity = $true
+                                }
+                            } catch {
+                                Write-Log "Error parsing time in $($file.Name): ${line} - $_"
+                            }
+                        }
+                    }
+                } catch {
+                    Write-Log "Error decompressing or reading $($file.Name): $_"
+                }
+            }
+        }
+
+        # Exit loop early if activity is found and this is the latest join
+        if ($activity -and $lastJoinTime -eq $endTime) {
+            return $activity
+        }
+    }
+
+    # Log final result
+    if ($activity) {
+        Write-Log "Player activity detected: ${lastJoinPlayer} joined at ${lastJoinTime} in ${lastJoinFile}."
+    } else {
+        Write-Log "No player activity detected between $startTime and $endTime."
+    }
+    
+    # Return activity status
+    return $activity
+}
+
+# Verify log file is writable
+try {
+    New-FolderIfNotExists $backupPath 
+    $logFile = Join-Path $backupPath "dailySaving.log"
+    Write-Log "Starting script execution"
+} catch {
+    Write-Error "Cannot write to log file at $logFile : $_"
+    exit 1
+}
 
 # Set the backupPath to go one level deeper into a timestamped folder  
 $backupPath = Join-Path $backupPath ((Get-Date).ToString("MM-dd-yyyy") + "_backup_" + (Get-LastPartOfPath $serverPath))
@@ -210,10 +381,19 @@ if ((Test-Path $backupPath)) {
     exit 1
 }
 
+# Check for player activity in the last 24 hours
+$hasActivity = Test-PlayerActivityInLast24Hours -serverPath $serverPath
+if (-not $hasActivity) {
+    Write-Log "No player activity in the last 24 hours. Skipping backup." $false
+    Write-Log "----------------------------------------------------------------`n`n" $false
+    Stop-Process -Id $PID -Force
+    exit 0
+}
+
 # Create the timestamped folder
 New-FolderIfNotExists $backupPath
 
-# check if the server is up
+# Check if the server is up
 $serverRunning = Test-MinecraftServer -rconPassword $rconPassword
 
 # If the server is running 
@@ -247,13 +427,13 @@ if ($warningMode) {
     Start-Sleep -Seconds 30
     
     Send-MinecraftMessage "The server will shut down for an automatic backup in thirty seconds."
-    Start-Sleep -Seconds 10
+    Start-Sleep -Seconds 30
     
     Send-MinecraftMessage "The server will shut down for an automatic backup in twenty seconds."
     Start-Sleep -Seconds 10
     
     Send-MinecraftMessage "The server will shut down for an automatic backup in ten seconds."
-    Start-Sleep -Seconds 5
+    Start-Sleep -Seconds 10
     
     Send-MinecraftMessage "The server will shut down for an automatic backup in five seconds."
     Start-Sleep -Seconds 1
@@ -293,12 +473,16 @@ Get-ChildItem -Path $serverPath -Recurse | ForEach-Object {
         if ($_.PSIsContainer) {
             # Create directory if it's a folder
             if (-not (Test-Path $destinationPath)) {
-                Write-Log "Creating directory $destinationPath"
+                if (-not $shortHand) {
+                    Write-Log "Creating directory $destinationPath"
+                }
                 New-FolderIfNotExists $destinationPath
             }
         } else {
             # Copy file, creating the directory structure
-            Write-Log "Copying file $($_.FullName) to $destinationPath."
+            if (-not $shortHand) {
+                Write-Log "Copying file $($_.FullName) to $destinationPath."
+            }
             Copy-Item -Path $_.FullName -Destination $destinationPath -Force
         }
     } catch {
@@ -318,4 +502,5 @@ if(Start-MinecraftServer){
 Write-Log ("Backup completed.") $false
 Write-Log "----------------------------------------------------------------`n`n" $false
 
+Stop-Process -Id $PID -Force
 exit 0
