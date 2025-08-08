@@ -288,9 +288,9 @@ if ($warningMode) {
     Send-MinecraftMessage "The server will shut down for an automatic backup in five minutes."; Start-Sleep -Seconds 150
     Send-MinecraftMessage "The server will shut down for an automatic backup in two and a half minutes."; Start-Sleep -Seconds 90
     Send-MinecraftMessage "The server will shut down for an automatic backup in one minute."; Start-Sleep -Seconds 30
-    Send-MinecraftMessage "The server will shut down for an automatic backup in thirty seconds."; Start-Sleep -Seconds 30
+    Send-MinecraftMessage "The server will shut down for an automatic backup in thirty seconds."; Start-Sleep -Seconds 10
     Send-MinecraftMessage "The server will shut down for an automatic backup in twenty seconds."; Start-Sleep -Seconds 10
-    Send-MinecraftMessage "The server will shut down for an automatic backup in ten seconds."; Start-Sleep -Seconds 10
+    Send-MinecraftMessage "The server will shut down for an automatic backup in ten seconds."; Start-Sleep -Seconds 5
     Send-MinecraftMessage "The server will shut down for an automatic backup in five seconds."; Start-Sleep -Seconds 1
     Send-MinecraftMessage "The server will shut down for an automatic backup in four seconds."; Start-Sleep -Seconds 1
     Send-MinecraftMessage "The server will shut down for an automatic backup in three seconds."; Start-Sleep -Seconds 1
