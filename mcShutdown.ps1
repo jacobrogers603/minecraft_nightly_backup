@@ -4,6 +4,8 @@
 
 param([switch]$Debug)
 
+if ($env:NOTIFYTYPE -ne 'FSD') { Log "Ignoring event $env:NOTIFYTYPE"; exit 0 }
+
 $ErrorActionPreference = 'Stop'
 
 ############## EDIT ME ##############

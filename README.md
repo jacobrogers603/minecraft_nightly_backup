@@ -35,12 +35,23 @@ Make a task in the task scheduler to run the script daily
 *Sometimes after making the task you need to restart the computer in order for it to start working*
 
 ## Other files
+These files implement a shutdown sequence triggered when a UPS master signals a power outage.
 
-other files are for a shutdown script that happens when a UPS-master signals there should be a shut down due to a power outage
+- A Synology NAS sends the signal after 20 seconds on battery.
+- WinNUT runs as a service waiting for the FSD notification, then calls `mcShutdown.ps1`.
+- `mcShutdown.ps1` warns players, stops the server, then shuts down the host.
 
-They are used with a synology nas that sends a signal after 20s of battery power
+After editing `upsmon.conf` (for example, enabling `NOTIFYFLAG FSD SYSLOG+EXEC`), reload or restart WinNUT so the setting takes effect.
 
-then winNut is running a service waiting for that
+## mcShutdown.ps1 RCON password
+
+`mcShutdown.ps1` reads the RCON password from the `RCON_PASS` environment variable. Set it before running the script:
+
+```powershell
+$env:RCON_PASS = 'your-rcon-password'
+```
+
+This sets the variable for the current PowerShell session.
 
 then the mcShutdown file is called so shutdown the server and then the computer safely after warning the players
 
@@ -53,3 +64,4 @@ $env:RCON_PASS = 'your-rcon-password'
 ```
 
 This sets the variable for the current PowerShell session.
+
