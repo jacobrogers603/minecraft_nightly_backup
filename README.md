@@ -36,10 +36,10 @@ Make a task in the task scheduler to run the script daily
 
 ## Other files
 
-other files are for a shutdown script that happens when a UPS-master signals there should be a shut down due to a power outtage
+other files are for a shutdown script that happens when a UPS-master signals there should be a shut down due to a power outage
 
 They are used with a synology nas that sends a signal after 20s of battery power
 
 then winNut is running a service waiting for that
 
-then the bat file is called so shutdown the server and then the computer
+then the mcShutdown file is called so shutdown the server and then the computer safely after warning the players
