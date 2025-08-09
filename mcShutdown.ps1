@@ -226,7 +226,14 @@ try {
     Log "[DEBUG] Skipping Windows shutdown."
   } else {
     Log "Issuing Windows shutdown in ${ShutdownDelaySeconds}s..."
-    Start-Process -FilePath shutdown.exe -ArgumentList "/s","/t",$ShutdownDelaySeconds,"/c","UPS final shutdown" -WindowStyle Hidden
+    try {
+      # Use fully qualified path and force closing apps to ensure shutdown proceeds
+      $shutdownExe = Join-Path $env:SystemRoot 'System32\\shutdown.exe'
+      Start-Process -FilePath $shutdownExe -ArgumentList "/s","/f","/t",$ShutdownDelaySeconds,"/c","UPS final shutdown" -WindowStyle Hidden -ErrorAction Stop
+    } catch {
+      Log "ERROR: Failed to invoke shutdown.exe: $($_.Exception.Message)"
+      throw
+    }
   }
 
   Log "Done."
