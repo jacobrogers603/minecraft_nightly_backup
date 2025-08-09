@@ -12,7 +12,7 @@ $ErrorActionPreference = 'Stop'
 $McrconPath   = 'C:\mcrcon\mcrcon.exe'
 $RconHost     = '127.0.0.1'
 $RconPort     = 25575
-$RconPass     = 'REDACTED'
+$RconPass     = $env:RCON_PASS
 
 $ServiceName  = 'mc_82424'   # NSSM service name
 
@@ -228,7 +228,11 @@ try {
     Log "[DEBUG] Skipping Windows shutdown."
   } else {
     Log "Issuing Windows shutdown in ${ShutdownDelaySeconds}s..."
-    Start-Process -FilePath shutdown.exe -ArgumentList "/s","/t",$ShutdownDelaySeconds,"/c","UPS final shutdown" -WindowStyle Hidden
+    $proc = Start-Process -FilePath shutdown.exe -ArgumentList "/s","/t",$ShutdownDelaySeconds,"/c","UPS final shutdown" -WindowStyle Hidden -Wait -PassThru
+    if ($proc.ExitCode -ne 0) {
+      Log ("shutdown.exe exited with code {0}" -f $proc.ExitCode)
+      throw ("shutdown.exe failed with code {0}" -f $proc.ExitCode)
+    }
   }
 
   Log "Done."

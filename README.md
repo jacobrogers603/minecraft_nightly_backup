@@ -53,3 +53,15 @@ $env:RCON_PASS = 'your-rcon-password'
 
 This sets the variable for the current PowerShell session.
 
+then the mcShutdown file is called so shutdown the server and then the computer safely after warning the players
+
+## mcShutdown.ps1 RCON password
+
+`mcShutdown.ps1` reads the RCON password from the `RCON_PASS` environment variable. Set it before running the script:
+
+```powershell
+$env:RCON_PASS = 'your-rcon-password'
+```
+
+This sets the variable for the current PowerShell session.
+
