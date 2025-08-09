@@ -10,7 +10,7 @@ $ErrorActionPreference = 'Stop'
 $McrconPath   = 'C:\mcrcon\mcrcon.exe'
 $RconHost     = '127.0.0.1'
 $RconPort     = 25575
-$RconPass     = 'REDACTED'
+$RconPass     = $env:RCON_PASS
 
 $ServiceName  = 'mc_82424'   # NSSM service name
 
