@@ -43,3 +43,13 @@ They are used with a synology nas that sends a signal after 20s of battery power
 then winNut is running a service waiting for that
 
 then the mcShutdown file is called so shutdown the server and then the computer safely after warning the players
+
+## mcShutdown.ps1 RCON password
+
+`mcShutdown.ps1` reads the RCON password from the `RCON_PASS` environment variable. Set it before running the script:
+
+```powershell
+$env:RCON_PASS = 'your-rcon-password'
+```
+
+This sets the variable for the current PowerShell session.
