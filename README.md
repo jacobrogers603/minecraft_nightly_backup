@@ -35,13 +35,11 @@ Make a task in the task scheduler to run the script daily
 *Sometimes after making the task you need to restart the computer in order for it to start working*
 
 ## Other files
-Other files support a shutdown script triggered when a UPS master signals a power outage.
+These files implement a shutdown sequence triggered when a UPS master signals a power outage.
 
-They are used with a Synology NAS that sends a signal after 20 seconds of battery power.
-
-WinNUT runs as a service waiting for that signal.
-
-The `mcShutdown` script is then called to shut down the server and, after warning players, the computer itself.
+- A Synology NAS sends the signal after 20 seconds on battery.
+- WinNUT runs as a service waiting for the FSD notification.
+- `mcShutdown.ps1` warns players, stops the server, then shuts down the host.
 
 After editing `upsmon.conf` (for example, enabling `NOTIFYFLAG FSD SYSLOG+EXEC`), reload or restart WinNUT so the setting takes effect.
 
