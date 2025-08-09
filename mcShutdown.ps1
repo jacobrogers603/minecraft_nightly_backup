@@ -30,12 +30,32 @@ $LogDir   = 'C:\minecraft'
 $LogFile  = Join-Path $LogDir 'mcShutdown.log'
 #####################################
 
+# Ensure log dir
 if (!(Test-Path $LogDir)) { New-Item -ItemType Directory -Path $LogDir -Force | Out-Null }
+
+# Robust logger with tiny retry to handle share violations
 function Log([string]$msg) {
   $ts = Get-Date -Format 'yyyy-MM-dd HH:mm:ss.fff'
   $line = "[$ts] $msg"
   Write-Host $line
-  Add-Content -Path $LogFile -Value $line
+  for ($i=0; $i -lt 5; $i++) {
+    try { Add-Content -Path $LogFile -Value $line; break }
+    catch { Start-Sleep -Milliseconds 40 }
+  }
+}
+
+# ---------------- Singleton: prevent multiple concurrent runs ----------------
+$globalMutexName = 'Global\mcShutdown_singleton'
+$mutex = $null
+$createdNew = $false
+try {
+  $mutex = New-Object System.Threading.Mutex($false, $globalMutexName, [ref]$createdNew)
+  if (-not $createdNew) {
+    Write-Host "[mutex] Another mcShutdown instance is already running. Exiting."
+    exit 0
+  }
+} catch {
+  # If mutex creation fails, proceed anyway (better to try a clean stop than nothing)
 }
 
 # ---------------- RCON helpers (through cmd.exe to preserve JSON) ----------------
@@ -112,105 +132,108 @@ function Wait-ForServiceStopped([string]$name, [int]$timeoutSec) {
   return $false
 }
 
-# ---------------- Start ----------------
-Log "=============================================="
-Log ("Start: Debug={0}" -f $Debug)
-Log ("Service: {0} | RCON: {1}:{2}" -f $ServiceName, $RconHost, $RconPort)
-
-# --- Player warnings (continue on failure) ---
+# ---------------- Main ----------------
 try {
-  Log "Warn players: shutdown in ${WarnTotal}s."
-  # EDIT 1: make first warn reflect $WarnTotal (20s)
-  Invoke-Tellraw ("POWER OUTAGE! Server on UPS battery, starting a safe shutdown. Save and stop incoming in {0}s." -f $WarnTotal) 'red' $true
-  Start-Sleep -Seconds $WarnPhase1
+  Log "=============================================="
+  Log ("Start: Debug={0}" -f $Debug)
+  Log ("Service: {0} | RCON: {1}:{2}" -f $ServiceName, $RconHost, $RconPort)
 
-  Log "Warn players: ${WarnPhase2}s remaining..."
-  # EDIT 2: make second warn reflect $WarnPhase2 (8s)
-  Invoke-Tellraw ("Stopping soon ({0}s). Stop all activity, prepare for save!" -f $WarnPhase2) 'gold'
-  Start-Sleep -Seconds $WarnPhase2
+  # --- Player warnings (continue on failure) ---
+  try {
+    Log "Warn players: shutdown in ${WarnTotal}s."
+    Invoke-Tellraw ("POWER OUTAGE! Server on UPS battery, starting a safe shutdown. Save and stop incoming in {0}s." -f $WarnTotal) 'red' $true
+    Start-Sleep -Seconds $WarnPhase1
 
-  Log "Warn players: stopping now."
-  Invoke-Tellraw 'Stopping now!' 'red' $true
-} catch {
-  Log "WARN: RCON tellraw failed: $($_.Exception.Message)"
+    Log "Warn players: ${WarnPhase2}s remaining..."
+    Invoke-Tellraw ("Stopping soon ({0}s). Stop all activity, prepare for save!" -f $WarnPhase2) 'gold'
+    Start-Sleep -Seconds $WarnPhase2
+
+    Log "Warn players: stopping now."
+    Invoke-Tellraw 'Stopping now!' 'red' $true
+  } catch {
+    Log "WARN: RCON tellraw failed: $($_.Exception.Message)"
+  }
+
+  # --- save-all + stop via RCON (graceful) ---
+  $saveOk = $false
+  $stopSent = $false
+  try {
+    Log "RCON: save-all flush"
+    Invoke-RconCmd '"save-all flush"' | Out-Null
+    $saveOk = $true
+  } catch {
+    Log "WARN: save-all failed via RCON: $($_.Exception.Message)"
+  }
+  try {
+    Log "RCON: stop"
+    Invoke-RconCmd '"stop"' | Out-Null
+    $stopSent = $true
+  } catch {
+    Log "WARN: stop failed via RCON: $($_.Exception.Message)"
+  }
+
+  # --- Ask SCM/NSSM to stop the service so state updates ---
+  try {
+    Log "SCM: Stop-Service $ServiceName (no-wait)"
+    Stop-Service -Name $ServiceName -ErrorAction SilentlyContinue
+  } catch {
+    Log "WARN: Stop-Service error: $($_.Exception.Message)"
+  }
+  try { sc.exe stop $ServiceName | Out-Null } catch {}
+  try { nssm.exe stop $ServiceName | Out-Null } catch {}
+
+  # --- Buffer, then wait for APP (Java) to exit, not just the wrapper ---
+  Log "Post-stop buffer: ${PostStopWaitSeconds}s"
+  Start-Sleep -Seconds $PostStopWaitSeconds
+
+  # Re-fetch service info
+  $svc = $null
+  try { $svc = Get-ServiceProcess $ServiceName } catch { Log "WARN: Could not read service info: $($_.Exception.Message)" }
+  [int]$svcPid = if ($svc) { $svc.ProcessId } else { 0 }
+  Log ("Service wrapper PID: {0}" -f $svcPid)
+
+  # Descendants (includes java.exe)
+  $appProcs = @()
+  if ($svcPid -gt 0) { $appProcs = Get-Descendants -rootPid $svcPid }
+  $appPids = @()
+  if ($appProcs) { $appPids = $appProcs.ProcessId | ForEach-Object {[int]$_} }
+
+  if ($appPids.Count -gt 0) {
+    $names = ($appProcs | Select-Object -ExpandProperty Name -Unique) -join ', '
+    Log ("App descendants found (count={0}; names={1}): {2}" -f $appPids.Count, $names, ($appPids -join ', '))
+    Log ("Waiting up to {0}s for application processes (descendants) to exit..." -f $AppPidWaitSeconds)
+    $appGone = Wait-ForProcsExit -pids $appPids -timeoutSec $AppPidWaitSeconds
+    if ($appGone) { Log "All application processes have exited." }
+    else { Log ("WARN: Some application processes still running after {0}s (graceful-only; not killing)." -f $AppPidWaitSeconds) }
+  } else {
+    Log "No app descendants found under service wrapper."
+    $appGone = $true
+  }
+
+  # --- Confirm service STOPPED ---
+  Log "Confirming service state STOPPED (up to ${ServiceStateWaitSeconds}s)..."
+  $svcStopped = $false
+  try {
+    $svcStopped = Wait-ForServiceStopped -name $ServiceName -timeoutSec $ServiceStateWaitSeconds
+  } catch {
+    Log "WARN: Could not query service state: $($_.Exception.Message)"
+  }
+  if ($svcStopped) { Log "Service reports STOPPED." }
+  else { Log "WARN: Service still not reporting STOPPED after ${ServiceStateWaitSeconds}s." }
+
+  # --- Windows shutdown (skip if Debug) ---
+  if ($Debug) {
+    Log "[DEBUG] Skipping Windows shutdown."
+  } else {
+    Log "Issuing Windows shutdown in ${ShutdownDelaySeconds}s..."
+    Start-Process -FilePath shutdown.exe -ArgumentList "/s","/t",$ShutdownDelaySeconds,"/c","UPS final shutdown" -WindowStyle Hidden
+  }
+
+  Log "Done."
 }
-
-# --- save-all + stop via RCON (graceful) ---
-$saveOk = $false
-$stopSent = $false
-try {
-  Log "RCON: save-all flush"
-  Invoke-RconCmd '"save-all flush"' | Out-Null
-  $saveOk = $true
-} catch {
-  Log "WARN: save-all failed via RCON: $($_.Exception.Message)"
+finally {
+  if ($mutex) {
+    try { $mutex.ReleaseMutex() } catch {}
+    $mutex.Dispose()
+  }
 }
-try {
-  Log "RCON: stop"
-  Invoke-RconCmd '"stop"' | Out-Null
-  $stopSent = $true
-} catch {
-  Log "WARN: stop failed via RCON: $($_.Exception.Message)"
-}
-
-# --- Ask SCM/NSSM to stop the service so state updates ---
-try {
-  Log "SCM: Stop-Service $ServiceName (no-wait)"
-  Stop-Service -Name $ServiceName -ErrorAction SilentlyContinue
-} catch {
-  Log "WARN: Stop-Service error: $($_.Exception.Message)"
-}
-try { sc.exe stop $ServiceName | Out-Null } catch {}
-try { nssm.exe stop $ServiceName | Out-Null } catch {}
-
-# --- Buffer, then wait for APP (Java) to exit, not just the wrapper ---
-Log "Post-stop buffer: ${PostStopWaitSeconds}s"
-Start-Sleep -Seconds $PostStopWaitSeconds
-
-# Re-fetch service info
-$svc = $null
-try { $svc = Get-ServiceProcess $ServiceName } catch { Log "WARN: Could not read service info: $($_.Exception.Message)" }
-[int]$svcPid = if ($svc) { $svc.ProcessId } else { 0 }
-Log ("Service wrapper PID: {0}" -f $svcPid)
-
-# Descendants (includes java.exe)
-$appProcs = @()
-if ($svcPid -gt 0) { $appProcs = Get-Descendants -rootPid $svcPid }
-$appPids = @()
-if ($appProcs) { $appPids = $appProcs.ProcessId | ForEach-Object {[int]$_} }
-
-if ($appPids.Count -gt 0) {
-  $names = ($appProcs | Select-Object -ExpandProperty Name -Unique) -join ', '
-  Log ("App descendants found (count={0}; names={1}): {2}" -f $appPids.Count, $names, ($appPids -join ', '))
-  Log ("Waiting up to {0}s for application processes (descendants) to exit..." -f $AppPidWaitSeconds)
-  $appGone = Wait-ForProcsExit -pids $appPids -timeoutSec $AppPidWaitSeconds
-  if ($appGone) { Log "All application processes have exited." }
-  else { Log ("WARN: Some application processes still running after {0}s (graceful-only; not killing)." -f $AppPidWaitSeconds) }
-} else {
-  Log "No app descendants found under service wrapper."
-  $appGone = $true
-}
-
-# --- Confirm service STOPPED ---
-Log "Confirming service state STOPPED (up to ${ServiceStateWaitSeconds}s)..."
-$svcStopped = $false
-try {
-  $svcStopped = Wait-ForServiceStopped -name $ServiceName -timeoutSec $ServiceStateWaitSeconds
-} catch {
-  Log "WARN: Could not query service state: $($_.Exception.Message)"
-}
-if ($svcStopped) { Log "Service reports STOPPED." }
-else { Log "WARN: Service still not reporting STOPPED after ${ServiceStateWaitSeconds}s." }
-
-# --- Summary ---
-Log ("Summary: saveOk={0} stopSent={1} appPids=[{2}] appGone={3} svcStopped={4}" -f $saveOk, $stopSent, ($appPids -join ','), $appGone, $svcStopped)
-
-# --- Windows shutdown (skip if Debug) ---
-if ($Debug) {
-  Log "[DEBUG] Skipping Windows shutdown."
-} else {
-  Log "Issuing Windows shutdown in ${ShutdownDelaySeconds}s..."
-  Start-Process -FilePath shutdown.exe -ArgumentList "/s","/t",$ShutdownDelaySeconds,"/c","UPS final shutdown" -WindowStyle Hidden
-}
-
-Log "Done."
