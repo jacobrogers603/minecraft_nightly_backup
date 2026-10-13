@@ -173,7 +173,7 @@ function Test-PlayerActivityInLast24Hours {
                     if ($line -match "joined the game" -and $line -match '\[(\d{2}):(\d{2}):(\d{2})\]') {
                         try {
                             $hour = [int]$matches[1]; $min = [int]$matches[2]; $sec = [int]$matches[3]
-                            if ($line -match '\]:\s*(\w+)\s*joined the game') { $player = $matches[1] } else { $player = "Unknown" }
+                            if ($line -match '\]:\s*(?:System chat:\s*)?(\w+)\s*joined the game') { $player = $matches[1] } else { $player = "Unknown" }
                             $logDate = [DateTime]::ParseExact($logDateStr, "yyyy-MM-dd", $null)
                             $lineTime = $logDate.AddHours($hour).AddMinutes($min).AddSeconds($sec)
                             if ($lineTime -ge $startTime -and $lineTime -le $endTime) {
@@ -202,7 +202,7 @@ function Test-PlayerActivityInLast24Hours {
                         if ($line -match "joined the game" -and $line -match '\[(\d{2}):(\d{2}):(\d{2})\]') {
                             try {
                                 $hour = [int]$matches[1]; $min = [int]$matches[2]; $sec = [int]$matches[3]
-                                if ($line -match '\]:\s*(\w+)\s*joined the game') { $player = $matches[1] } else { $player = "Unknown" }
+                                if ($line -match '\]:\s*(?:System chat:\s*)?(\w+)\s*joined the game') { $player = $matches[1] } else { $player = "Unknown" }
                                 $logDate = [DateTime]::ParseExact($logDateStr, "yyyy-MM-dd", $null)
                                 $lineTime = $logDate.AddHours($hour).AddMinutes($min).AddSeconds($sec)
                                 if ($lineTime -ge $startTime -and $lineTime -le $endTime) {
